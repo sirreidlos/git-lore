@@ -1,0 +1,357 @@
+<html>
+
+<head>
+  <title>repos</title>
+  <style>
+    pre {
+      white-space: pre-wrap
+    }
+
+    * {
+      font-size: 100%;
+      font-family: monospace
+    }
+  </style>
+  <link type="text/css" rel="stylesheet" media="screen,print" href="css/light.css">
+  <link type="text/css" rel="stylesheet" href="css/dark.css" media="screen and (prefers-color-scheme:dark)">
+</head>
+
+<body>
+  <form id="store-pat">
+    <input id="pat" name="pat" type="password" placeholder="token">
+    <input type="submit" value="store pat">
+    Ensure that the PAT has read:org
+  </form>
+  <form id="store-repo">
+    <select name="type" id="type">
+      <option value="repository">Single Repository</option>
+      <option value="organization">Organization Name</option>
+      <option value="user">Username</option>
+    </select>
+    <input id="repo" name="repo" type="text">
+    Limit: <input id="query-limit" type="number" min=1 max=100 value=10>
+    <input type="submit" value="store repo">
+  </form>
+  <hr>
+  <p>Logs:</p>
+  <pre id="logs"></pre>
+  <hr>
+  <pre id="repos"></pre>
+  <script type="text/javascript">
+    const reposElement = document.getElementById("repos");
+    const storePatFormElement = document.getElementById("store-pat");
+    const storeRepoFormElement = document.getElementById("store-repo");
+    const patTextElement = document.getElementById("pat");
+    const repoTextElement = document.getElementById("repo");
+    const typeSelectElement = document.getElementById('type');
+    const logsElement = document.getElementById("logs");
+    const queryLimitElement = document.getElementById("query-limit");
+    logsElement.value = "";
+
+    const placeholders = {
+      repository: 'octocat/Hello-World',
+      organization: 'github',
+      user: 'octocat'
+    };
+
+    typeSelectElement.addEventListener('change', () => {
+      repoTextElement.placeholder = placeholders[typeSelectElement.value];
+    });
+
+    let pat = localStorage.getItem("GIT_LORE_GITHUB_PAT");
+    patTextElement.value = pat;
+
+    let repos = JSON.parse(localStorage.getItem("GIT_LORE_REPOS"));
+    console.log(`REPOS: ${repos}`);
+    if (!repos) {
+      repos = [];
+    }
+
+    function storePat(e) {
+      e.preventDefault();
+      pat = patTextElement.value;
+
+      localStorage.setItem("GIT_LORE_GITHUB_PAT", pat);
+    }
+
+    function storeRepo(e) {
+      e.preventDefault();
+      var repo = repoTextElement.value;
+      var type = typeSelectElement.value;
+      var repoLimit = queryLimitElement.value;
+
+      if (type === "repository") {
+        repos.push({
+          type: type,
+          owner: repo.split("/")[0],
+          name: repo.split("/")[1],
+        })
+      } else if (type === "organization") {
+        repos.push({
+          type: type,
+          organization: repo,
+          repoLimit: repoLimit,
+        })
+      } else if (type === "user") {
+        repos.push({
+          type: type,
+          user: repo,
+          repoLimit: repoLimit,
+        })
+      }
+
+
+      localStorage.setItem("GIT_LORE_REPOS", JSON.stringify(repos));
+    }
+
+    function getRequestHeaders() {
+      var headers = null;
+      if (pat) {
+        headers = {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${pat}`
+        }
+      } else {
+        headers = {
+          'Content-Type': 'application/json',
+        }
+      }
+
+      return headers;
+    }
+
+    function buildQuery(repos) {
+      const queryParts = repos.map((r, i) => {
+        const alias = `${r.type}_${i}`;
+
+        if (r.type === "repository") {
+          return `
+            ${alias}: repository(owner: "${r.owner}", name: "${r.name}") {
+              name
+              description
+              owner { login }
+              defaultBranchRef {
+                target {
+                  ... on Commit {
+                    history(first: 10) {
+                      edges {
+                        node {
+                          oid
+                          messageHeadline
+                          committedDate
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          `;
+        } else if (r.type === "organization") {
+          return `
+            ${alias}: organization(login: "${r.organization}") {
+              repositories(first: ${r.repoLimit}, orderBy: {field: PUSHED_AT, direction: DESC}) {
+                nodes {
+                  name
+                  description
+                  owner { login }
+                  defaultBranchRef {
+                    target {
+                      ... on Commit {
+                        history(first: 10) {
+                          edges {
+                            node {
+                              oid
+                              messageHeadline
+                              committedDate
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          `;
+        } else if (r.type === "user") {
+          return `
+            ${alias}: user(login: "${r.username}") {
+              repositories(first: ${r.repoLimit}, orderBy: {field: PUSHED_AT, direction: DESC}) {
+                nodes {
+                  name
+                  description
+                  owner { login }
+                  defaultBranchRef {
+                    target {
+                      ... on Commit {
+                        history(first: 10) {
+                          edges {
+                            node {
+                              oid
+                              messageHeadline
+                              committedDate
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          `;
+        }
+
+        return "";
+      });
+
+      return `
+        query {
+          ${queryParts.join("\n")}
+          rateLimit {
+            limit
+            cost
+            remaining
+            resetAt
+          }
+        }
+      `;
+    }
+
+    function appendLog(message) {
+      logs.innerHTML = `${logs.innerHTML}\n  - ${message}`
+    }
+
+    function parseSingleRepo(repo) {
+      var commitList = [];
+      for (var edge of repo.defaultBranchRef.target.history.edges) {
+        commitList.push({
+          commitOid: edge.node.oid,
+          commitMessage: edge.node.messageHeadline,
+          commitDate: edge.node.committedDate,
+        })
+      }
+
+      return {
+        owner: repo.owner.login,
+        name: repo.name,
+        description: repo.description,
+        commitList: commitList
+      };
+    }
+
+    function parseMultipleRepos(repos) {
+      var repoList = [];
+      for (var repo of repos) {
+        repoList.push(parseSingleRepo(repo));
+      }
+
+      return repoList;
+    }
+
+    function parseGraphQLResponse(response) {
+      console.log("Parsing the GraphQL response");
+      var repoList = [];
+      for (var key in response.data) {
+        if (key === "rateLimit") {
+          appendLog(`Rate Limit: ${JSON.stringify(response.data[key])}`);
+          continue;
+        }
+
+        console.log(`Parsing ${key}`);
+        if (key.split("_")[0] === "repository") {
+          var repo = parseSingleRepo(response.data[key]);
+          repoList.push(repo);
+        } else {
+          var repos = parseMultipleRepos(response.data[key].repositories.nodes);
+          repoList.push(...repos);
+        }
+      }
+
+      return repoList;
+    }
+
+    function formatCommitForPre(commit, repo) {
+      const date = new Date(commit.commitDate);
+      const yyyy = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const dd = String(date.getDate()).padStart(2, '0');
+      const hh = String(date.getHours()).padStart(2, '0');
+      const min = String(date.getMinutes()).padStart(2, '0');
+
+      const commitLink = `https://github.com/${repo.owner}/${repo.name}/commit/${commit.commitOid}`;
+      return `    ${yyyy}-${mm}-${dd} ${hh}:${min} - <a href=${commitLink}>${commit.commitMessage}</a>`
+    }
+
+    function formatReposForPre(repoList) {
+      const reposElement = document.getElementById("repos");
+      repoList.sort((a, b) => new Date(b.commitList[0].commitDate) - new Date(a.commitList[0].commitDate));
+
+      let cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - 2);
+
+      const lines = repoList.map(repo => {
+        if (!repo.owner || !repo.name || !repo.description || !repo.commitList) {
+          console.log(`Broken repo: ${JSON.stringify(repo)}`);
+        }
+
+        const commitLines = [formatCommitForPre(repo.commitList[0], repo)];
+        for (var i = 1; i < repo.commitList.length; i++) {
+          var commitDate = new Date(repo.commitList[i].commitDate);
+          if (commitDate < cutoffDate) {
+            continue;
+          }
+
+          commitLines.push(formatCommitForPre(repo.commitList[i], repo));
+        }
+
+        const repoLink = `https://github.com/${repo.owner}/${repo.name}`;
+
+        return `* <a href=${repoLink}>${repo.owner}/${repo.name}</a>\n  ${repo.description}\n${commitLines.join("\n")}`;
+      });
+
+      reposElement.innerHTML = lines.join("\n\n");
+    }
+
+    function queryMultipleRepos(repos) {
+      const headers = getRequestHeaders();
+      const query = buildQuery(repos);
+
+      fetch('https://api.github.com/graphql', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({query})
+      })
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP error! ${res.status}`);
+          return res.json();
+        })
+        .then(json => {
+          console.log("Raw response:", json);
+          return parseGraphQLResponse(json);
+        })
+        .then(repoList => {
+          console.log("Parsed repos:", repoList);
+          formatReposForPre(repoList);
+        })
+        .catch(err => {
+          appendLog(err);
+          console.error(err);
+        });
+    }
+
+    if (!pat) {
+      appendLog(`No <a href="https://github.com/settings/tokens/new">PAT</a> provided. Please provide one with scope read:org for a smoother experience`);
+    }
+    queryMultipleRepos(repos);
+
+    storePatFormElement.addEventListener("submit", storePat);
+    storeRepoFormElement.addEventListener("submit", (e) => {
+      storeRepo(e);
+      queryMultipleRepos(repos);
+    });
+  </script>
+</body>
+
+</html>
