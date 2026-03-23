@@ -1,0 +1,72 @@
+<html>
+
+<head>
+  <title>repos</title>
+  <style>
+    pre {
+      white-space: pre-wrap
+    }
+
+    * {
+      font-size: 100%;
+      font-family: monospace
+    }
+  </style>
+  <link type="text/css" rel="stylesheet" media="screen,print" href="../css/light.css">
+  <link type="text/css" rel="stylesheet" href="../css/dark.css" media="screen and (prefers-color-scheme:dark)">
+</head>
+
+<body>
+  <p>Logs:</p>
+  <pre id="logs"></pre>
+  <hr>
+  <pre id="sources"></pre>
+  <script type="text/javascript">
+    const sourcesElement = document.getElementById("sources");
+    const logsElement = document.getElementById("logs");
+    logsElement.value = "";
+
+    let repos = JSON.parse(localStorage.getItem("GIT_LORE_REPOS"));
+    console.log(`REPOS: ${JSON.stringify(repos)}`);
+    if (!repos) {
+      repos = [];
+    }
+
+    function displaySource(repos) {
+      sourcesElement.innerHTML = "";
+
+      var lines = repos.map((s, index) => {
+        var type = s.type;
+        if (type === "repository") {
+          var {owner, name} = s;
+          return `${owner}/${name} (${type}) <button onclick="removeSource(${index})">x</button>`;
+        } else if (type === "organization") {
+          var {organization, repoLimit} = s;
+          return `${organization} (${type} displaying ${repoLimit} repositories) <button onclick="removeSource(${index})">x</button>`;
+        } else if (type === "user") {
+          var {user, repoLimit} = s;
+          return `${user} (${type} displaying ${repoLimit} repositories) <button onclick="removeSource(${index})">x</button>`;
+        }
+        return "";
+      });
+
+      sourcesElement.innerHTML = lines.join("\n");
+    }
+
+    function removeSource(index) {
+      appendLog(`Removing entry: ${JSON.stringify(repos[index])}`);
+      repos.splice(index, 1);
+      localStorage.setItem("GIT_LORE_REPOS", JSON.stringify(repos));
+      displaySource(repos);
+    }
+
+    function appendLog(message) {
+      logs.innerHTML = `${logs.innerHTML}\n  - ${message}`
+    }
+
+    displaySource(repos);
+
+  </script>
+</body>
+
+</html>
